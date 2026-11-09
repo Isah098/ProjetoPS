@@ -1,6 +1,7 @@
 venv/
 .env
 __pycache__/
-*.pyc
-uploads/
+*.py[cod]
 .pytest_cache/
+uploads/*
+!uploads/.gitkeep
