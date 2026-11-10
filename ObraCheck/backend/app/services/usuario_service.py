@@ -45,8 +45,7 @@ def cadastrar_usuario(
     )
 
     db.add(novo_usuario)
-    db.commit()
-    db.refresh(novo_usuario)
+    db.flush()
 
     # Retorna o usuário e a senha inicial
     return novo_usuario, senha_inicial

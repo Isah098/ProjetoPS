@@ -3,6 +3,7 @@ from datetime import date
 from pydantic import BaseModel, Field, ConfigDict, model_validator
 
 
+
 class ObraCriar(BaseModel):
     nome: str = Field(min_length=3, max_length=150)
     endereco: str = Field(min_length=5, max_length=255)

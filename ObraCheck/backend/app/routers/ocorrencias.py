@@ -67,8 +67,6 @@ def criar_ocorrencia(
             detail="Erro ao registrar ocorrência e histórico."
         )
 
-
-
 @router.get("/", response_model=list[OcorrenciaResposta])
 def listar_ocorrencias(
     obra_id: int | None = None,
@@ -196,20 +194,30 @@ def atualizar_status_ocorrencia(
             status_code=400,
             detail="A ocorrência já possui esse status."
         )
+    try:
+        ocorrencia.status = novo_status
 
-    ocorrencia.status = novo_status
-    db.commit()
-    db.refresh(ocorrencia)
+        registrar_historico(
+            db=db,
+            usuario=usuario,
+            acao="Alterar status da ocorrência",
+            descricao=(
+                f"O usuário {usuario.nome} alterou o status "
+                f"de {status_anterior} para {novo_status}."
+            ),
+            ocorrencia_id=ocorrencia.id
+        )
 
-    registrar_historico(
-        db=db,
-        usuario=usuario,
-        acao="Alterar status da ocorrência",
-        descricao=(
-            f"O usuário {usuario.nome} alterou o status "
-            f"de {status_anterior} para {novo_status}."
-        ),
-        ocorrencia_id=ocorrencia.id
-    )
+        # Confirma a alteração e o histórico juntos
+        db.commit()
+        db.refresh(ocorrencia)
 
-    return OcorrenciaResposta.model_validate(ocorrencia)
+        return OcorrenciaResposta.model_validate(ocorrencia)
+
+    except Exception:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="Erro ao atualizar status e registrar histórico."
+        )
+

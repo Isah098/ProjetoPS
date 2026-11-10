@@ -1,5 +1,4 @@
 
-import os
 import uuid
 from pathlib import Path
 
@@ -14,23 +13,28 @@ PASTA_UPLOADS = Path("uploads")
 
 TAMANHO_MAXIMO = 10 * 1024 * 1024  # 10 MB
 
-
 TIPOS_PERMITIDOS = {
-    ".jpg": "imagem/jpeg",
-    ".jpeg": "imagem/jpeg",
-    ".png": "imagem/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
     ".pdf": "application/pdf",
     ".mp4": "video/mp4",
     ".doc": "application/msword",
-    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".mp3": "audio/mpeg",
+    ".wav": "audio/wav",
+    ".m4a": "audio/mp4",
+    ".ogg": "audio/ogg",
+    ".webm": "audio/webm"
 }
-
 
 
 async def cadastrar_evidencia(
     db: Session,
     arquivo: UploadFile,
-    ocorrencia_id: int
+    ocorrencia_id: int,
+    latitude: float | None = None,
+    longitude: float | None = None
 ):
     ocorrencia = db.query(Ocorrencia).filter(
         Ocorrencia.id == ocorrencia_id
@@ -38,6 +42,12 @@ async def cadastrar_evidencia(
 
     if not ocorrencia:
         raise ValueError("Ocorrência não encontrada.")
+
+    if latitude is not None and not -90 <= latitude <= 90:
+        raise ValueError("Latitude inválida.")
+
+    if longitude is not None and not -180 <= longitude <= 180:
+        raise ValueError("Longitude inválida.")
 
     extensao = Path(arquivo.filename or "").suffix.lower()
 
@@ -66,7 +76,9 @@ async def cadastrar_evidencia(
             caminho_arquivo=str(caminho),
             tipo_arquivo=TIPOS_PERMITIDOS[extensao],
             tamanho_bytes=len(conteudo),
-            ocorrencia_id=ocorrencia_id
+            ocorrencia_id=ocorrencia_id,
+            latitude=latitude,
+            longitude=longitude
         )
 
         db.add(nova_evidencia)

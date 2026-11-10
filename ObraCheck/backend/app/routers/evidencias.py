@@ -1,3 +1,5 @@
+import logging
+logger = logging.getLogger(__name__)
 
 from fastapi import (
     APIRouter,
@@ -33,6 +35,8 @@ router = APIRouter(
 async def enviar_evidencia(
     ocorrencia_id: int = Form(...),
     arquivo: UploadFile = File(...),
+    latitude: float | None = Form(None),
+    longitude: float | None = Form(None),
     db: Session = Depends(get_db),
     usuario=Depends(obter_usuario_atual)
 ):
@@ -92,7 +96,9 @@ async def enviar_evidencia(
         evidencia = await cadastrar_evidencia(
             db=db,
             arquivo=arquivo,
-            ocorrencia_id=ocorrencia_id
+            ocorrencia_id=ocorrencia_id,
+            latitude=latitude,
+            longitude=longitude
         )
 
         registrar_historico(
@@ -188,15 +194,6 @@ def listar_evidencias(
                 detail="Você não tem acesso a esta obra."
             )
 
-        if (
-            perfil.nome == "vistoriador"
-            and ocorrencia.vistoriador_id != usuario.id
-        ):
-            raise HTTPException(
-                status_code=403,
-                detail="Você não tem acesso a esta ocorrência."
-            )
-
     else:
         raise HTTPException(
             status_code=403,
@@ -263,15 +260,6 @@ def baixar_evidencia(
                 detail="Você não tem acesso a esta obra."
             )
 
-        if (
-            perfil.nome == "vistoriador"
-            and ocorrencia.vistoriador_id != usuario.id
-        ):
-            raise HTTPException(
-                status_code=403,
-                detail="Você não tem acesso a esta ocorrência."
-            )
-
     else:
         raise HTTPException(
             status_code=403,
@@ -296,6 +284,7 @@ def baixar_evidencia(
     "/{evidencia_id}",
     status_code=status.HTTP_204_NO_CONTENT
 )
+
 def excluir_evidencia(
     evidencia_id: int,
     db: Session = Depends(get_db),
@@ -332,27 +321,40 @@ def excluir_evidencia(
             status_code=400,
             detail="Caminho de arquivo inválido."
         )
+    try:
+        registrar_historico(
+            db=db,
+            usuario=usuario,
+            acao="Excluir evidência",
+            descricao=(
+                f"O administrador {usuario.nome} excluiu "
+                f"o arquivo {evidencia.nome_arquivo} "
+                f"da ocorrência {evidencia.ocorrencia_id}."
+            ),
+            ocorrencia_id=evidencia.ocorrencia_id
+        )
 
-   
-    # Registra a exclusão no histórico
-    registrar_historico(
-        db=db,
-        usuario=usuario,
-        acao="Excluir evidência",
-        descricao=(
-            f"O administrador {usuario.nome} excluiu "
-            f"o arquivo {evidencia.nome_arquivo} "
-            f"da ocorrência {evidencia.ocorrencia_id}."
-        ),
-        ocorrencia_id=evidencia.ocorrencia_id
-    )
+        db.delete(evidencia)
+        db.commit()
 
-    # Remove o registro do banco
-    db.delete(evidencia)
-    db.commit()
+    except Exception:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="Erro ao excluir evidência e registrar histórico."
+        )
 
-    # Remove o arquivo físico
-    if caminho.is_file():
-        caminho.unlink()
+    # Remove o arquivo físico somente após o commit
+    try:
+        if caminho.is_file():
+            caminho.unlink()
+
+    except OSError:
+        logger.exception(
+            "Falha ao remover o arquivo físico da evidência %s. "
+            "Caminho: %s",
+            evidencia_id,
+            caminho
+        )
 
     return Response(status_code=204)

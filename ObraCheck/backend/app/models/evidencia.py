@@ -7,9 +7,8 @@ from sqlalchemy import (
     BigInteger
 )
 from sqlalchemy.sql import func
-
 from app.database import Base
-
+from sqlalchemy import Float
 
 class Evidencia(Base):
     __tablename__ = "evidencias"
@@ -43,6 +42,9 @@ class Evidencia(Base):
         nullable=False
     )
 
+    latitude = Column(Float, nullable=True)
+    longitude = Column(Float, nullable=True)
+    
     enviada_em = Column(
         DateTime(timezone=True),
         server_default=func.now()

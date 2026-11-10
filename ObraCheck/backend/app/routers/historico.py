@@ -39,3 +39,4 @@ def listar_historico(
     return db.query(Historico).order_by(
         Historico.criada_em.desc()
     ).all()
+

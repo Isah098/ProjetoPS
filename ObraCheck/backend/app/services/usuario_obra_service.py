@@ -58,13 +58,9 @@ def vincular_usuario_obra(
         obra_id=obra_id
     )
 
-    try:
-        db.add(novo_vinculo)
-        db.commit()
-        db.refresh(novo_vinculo)
+    
+    db.add(novo_vinculo)
+    db.flush()
 
-        return novo_vinculo
+    return novo_vinculo
 
-    except Exception:
-        db.rollback()
-        raise

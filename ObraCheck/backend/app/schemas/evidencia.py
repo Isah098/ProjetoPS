@@ -9,6 +9,8 @@ class EvidenciaResposta(BaseModel):
     tipo_arquivo: str
     tamanho_bytes: int
     ocorrencia_id: int
+    latitude: float | None = None
+    longitude: float | None = None
     enviada_em: datetime | None = None
 
     model_config = ConfigDict(from_attributes=True)

@@ -23,7 +23,6 @@ def cadastrar_obra(
     )
 
     db.add(nova_obra)
-    db.commit()
-    db.refresh(nova_obra)
+    db.flush()
 
     return nova_obra
