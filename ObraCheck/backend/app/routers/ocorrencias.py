@@ -221,3 +221,34 @@ def atualizar_status_ocorrencia(
             detail="Erro ao atualizar status e registrar histórico."
         )
 
+
+
+from pydantic import BaseModel, Field
+from app.models.historico import Historico
+
+class ObservacaoCriar(BaseModel):
+    texto: str = Field(min_length=1, max_length=5000)
+
+@router.post("/{ocorrencia_id}/observacoes", status_code=201)
+def registrar_observacao(ocorrencia_id: int, dados: ObservacaoCriar, db: Session = Depends(get_db), usuario=Depends(obter_usuario_atual)):
+    ocorrencia = db.get(Ocorrencia, ocorrencia_id)
+    if not ocorrencia:
+        raise HTTPException(404, "Ocorrência não encontrada.")
+    perfil = db.get(Perfil, usuario.perfil_id)
+    if not perfil or perfil.nome not in ("gestor", "administrador"):
+        raise HTTPException(403, "Somente gestores e administradores podem registrar análises.")
+    if perfil.nome == "gestor" and not db.query(UsuarioObra).filter_by(usuario_id=usuario.id, obra_id=ocorrencia.obra_id).first():
+        raise HTTPException(403, "Sem acesso à obra.")
+    registrar_historico(db=db, usuario=usuario, acao="Observação da ocorrência", descricao=dados.texto, ocorrencia_id=ocorrencia_id)
+    db.commit()
+    return {"mensagem": "Observação registrada."}
+
+@router.get("/{ocorrencia_id}/observacoes")
+def consultar_observacoes(ocorrencia_id: int, db: Session = Depends(get_db), usuario=Depends(obter_usuario_atual)):
+    ocorrencia = db.get(Ocorrencia, ocorrencia_id)
+    if not ocorrencia:
+        raise HTTPException(404, "Ocorrência não encontrada.")
+    perfil = db.get(Perfil, usuario.perfil_id)
+    if not perfil or (perfil.nome != "administrador" and not db.query(UsuarioObra).filter_by(usuario_id=usuario.id, obra_id=ocorrencia.obra_id).first()):
+        raise HTTPException(403, "Sem acesso à obra.")
+    return [{"id": h.id, "texto": h.descricao, "data": h.criada_em.isoformat() if h.criada_em else None} for h in db.query(Historico).filter_by(ocorrencia_id=ocorrencia_id, acao="Observação da ocorrência").order_by(Historico.id).all()]

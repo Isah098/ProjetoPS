@@ -2,6 +2,22 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 
 import "./index.css";
 
+const API_URL=import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
+async function api(path,options={},authenticated=true,explicitToken){
+  const token=explicitToken || read("oc_session",null)?.token;
+  const response=await fetch(`${API_URL}${path}`,{
+    ...options,
+    headers:{"Content-Type":"application/json",...(authenticated&&token?{Authorization:`Bearer ${token}`}:{ }),...options.headers}
+  });
+  const data=await response.json().catch(()=>null);
+  if(!response.ok)throw new Error(typeof data?.detail==="string"?data.detail:`Erro HTTP ${response.status}`);
+  return data;
+}
+const mapIssue=(o,works)=>({id:o.protocolo,backendId:o.id,title:o.descricao.slice(0,65),description:o.descricao,
+  work:works.find(w=>w.id===o.obra_id)?.name||`Obra ${o.obra_id}`,obraId:o.obra_id,
+  place:"Não informado",status:({pendente:"Pendente",em_analise:"Em análise",resolvida:"Concluída",cancelada:"Cancelada"})[o.status]||o.status,
+  date:o.criada_em?new Date(o.criada_em).toLocaleDateString("pt-BR"):"",severity:"Não informada"});
+
 const initialUsers = [
 
   { id: 1, name: "Administrador", cpf: "99999999999", password: "123456", role: "admin", active: true },
@@ -40,13 +56,14 @@ const roleName = r => ({admin:"Administrador", inspector:"Vistoriador", manager:
 
 function App(){
 
-  const [users,setUsers]=useState(()=>read("oc_users",initialUsers));
+  const [users,setUsers]=useState([]);
+  const [profileIds,setProfileIds]=useState({});
 
   const [session,setSession]=useState(()=>read("oc_session",null));
 
-  const [works]=useState(initialWorks);
+  const [works,setWorks]=useState([]);
 
-  const [issues,setIssues]=useState(()=>read("oc_issues",seedIssues).map(i => ({...i, work: ({"Residencial Parque das Flores":"Residencial Aurora","Edifício Vista Mar":"Edifício Horizonte","Centro Empresarial Atlântico":"Parque das Oliveiras"})[i.work] || i.work})));
+  const [issues,setIssues]=useState([]);
 
   const [page,setPage]=useState("login");
 
@@ -79,13 +96,21 @@ function App(){
     setPage("issue");
   }
 
-  function saveManagerAnalysis(){
+  async function saveManagerAnalysis(){
     if (!selectedIssue || session?.role !== "manager") return;
     const note=managerDraftNote.trim();
     if (!note && managerDraftStatus === selectedIssue.status){
       setManagerSaveMessage("Selecione um novo status ou escreva uma observação antes de salvar.");
       return;
     }
+    try {
+      if(managerDraftStatus!==selectedIssue.status){
+        const status=({"Pendente":"pendente","Em análise":"em_analise","Concluída":"resolvida","Cancelada":"cancelada"})[managerDraftStatus];
+        if(!status)throw new Error("Status inválido");
+        await api(`/ocorrencias/${selectedIssue.backendId}/status`,{method:"PATCH",body:JSON.stringify({status})});
+      }
+      if(note)await api(`/ocorrencias/${selectedIssue.backendId}/observacoes`,{method:"POST",body:JSON.stringify({texto:note})});
+    }catch(err){setManagerSaveMessage(err.message);return;}
     const timestamp=new Date();
     const action={
       id:`${timestamp.getTime()}-${Math.random().toString(36).slice(2,7)}`,
@@ -356,70 +381,54 @@ function App(){
 
   const [userForm,setUserForm]=useState({name:"",cpf:"",password:"",role:"inspector"}); const [editing,setEditing]=useState(null);
 
-  useEffect(()=>localStorage.setItem("oc_users",JSON.stringify(users)),[users]);
+
 
   useEffect(()=>localStorage.setItem("oc_session",JSON.stringify(session)),[session]);
 
-  useEffect(()=>localStorage.setItem("oc_issues",JSON.stringify(issues)),[issues]);
+
 
   useEffect(()=>{ if(session) setPage(session.role==="admin"?"admin":session.role==="manager"?"manager":"works"); else setPage("login"); },[]);
 
-  const current=users.find(u=>session && u.id===session.id);
+  const current=users.find(u=>session && u.id===session.id) || (session ? {id:session.id,name:session.name,role:session.role} : null);
+
+  useEffect(()=>{
+    if(!session?.token){setWorks([]);setIssues([]);return;}
+    let cancelled=false;
+    Promise.all([api("/obras/",{},true,session.token),api("/ocorrencias/",{},true,session.token)])
+      .then(([obras,ocorrencias])=>{
+        if(cancelled)return;
+        const mapped=obras.map(o=>({id:o.id,code:`OBR-${o.id}`,name:o.nome,address:o.endereco,progress:0,pending:0,total:0,status:o.status}));
+        setWorks(mapped);
+        setIssues(ocorrencias.map(o=>mapIssue(o,mapped)));
+        if(session.role==="admin")Promise.all([api("/usuarios/",{},true,session.token),api("/usuarios/perfis/disponiveis",{},true,session.token)]).then(([list,perfis])=>{if(cancelled)return;const names=Object.fromEntries(perfis.map(p=>[p.id,p.nome]));setProfileIds(Object.fromEntries(perfis.map(p=>[p.nome,p.id])));setUsers(list.map(u=>({id:u.id,name:u.nome,cpf:u.cpf,role:({administrador:"admin",gestor:"manager",vistoriador:"inspector"})[names[u.perfil_id]]||"inspector",perfilId:u.perfil_id,active:u.ativo})));}).catch(err=>setError(err.message));
+      }).catch(err=>{if(!cancelled)setError("Erro ao carregar dados do servidor: "+err.message);});
+    return ()=>{cancelled=true;};
+  },[session?.token]);
 
   const myIssues=useMemo(()=>issues.filter(i=>!selectedWork || i.work===selectedWork.name),[issues,selectedWork]);
 
-  function login(e){e.preventDefault(); const found=users.find(u=>u.cpf===cpf.replace(/\D/g,"") && u.password===password && u.active); if(!found){setError("CPF ou senha inválidos.");return;} setSession({id:found.id,role:found.role});setError("");setPage(found.role==="admin"?"admin":found.role==="manager"?"manager":"works");}
+  async function login(e){
+    e.preventDefault(); setError("");
+    try {
+      const data=await api("/auth/login",{method:"POST",body:JSON.stringify({cpf:cpf.replace(/\D/g,""),senha:password})},false);
+      const role=({administrador:"admin",gestor:"manager",vistoriador:"inspector"})[data.usuario.perfil];
+      if(!role) throw new Error("Perfil não reconhecido: "+data.usuario.perfil);
+      const next={id:data.usuario.id,role,name:data.usuario.nome,token:data.access_token};
+      setSession(next); setUsers([{id:next.id,name:next.name,cpf:data.usuario.cpf,role,active:true}]);
+      setPassword("");setPage(role==="admin"?"admin":role==="manager"?"manager":"works");
+      if(data.precisa_trocar_senha) alert("Sua conta exige alteração da senha inicial. Faça a alteração antes de continuar usando o sistema.");
+    } catch(err){setError(err.message);}
+  }
 
-  function logout(){setSession(null);setSelectedWork(null);setMenu(false);setLogoutOpen(false);setCpf("");setPassword("");setPage("login");}
+  function logout(){setWorks([]);setIssues([]);setSession(null);setSelectedWork(null);setMenu(false);setLogoutOpen(false);setCpf("");setPassword("");setPage("login");}
 
-  function addIssue(){
-
-    const existing = editingIssueId ? issues.find(i => i.id === editingIssueId) : null;
-
-    const item = {
-
-      ...(existing || {}),
-
-      id: existing?.id || `NC-${String(issues.length+25).padStart(3,"0")}`,
-
-      title: form.title, work: selectedWork.name, place: form.place,
-
-      description: form.description, severity: form.severity,
-
-      status: existing?.status || "Pendente",
-       originalStatus: existing?.originalStatus || existing?.status || "Registrada",
-
-      date: existing?.date || new Date().toLocaleDateString("pt-BR"),
-
-      inspector: existing?.inspector || current?.name || "Vistoriador",
-
-      time: existing?.time || new Date().toLocaleTimeString("pt-BR", {hour:"2-digit",minute:"2-digit"})
-
-    };
-
-    // Preserva as URLs dos arquivos até a página ser recarregada. Não envia ao backend.
-
-    const previous = issueEvidence[item.id] || {};
-
-    const photos = photoPreviews.length ? [...photoPreviews] : (existing ? previous.photos || [] : []);
-
-    const audio = audioUrl || (existing ? previous.audio || "" : "");
-
-    setIssueEvidence(prev => ({...prev,[item.id]:{photos,audio,duration:audioUrl ? audioDuration : previous.duration || 0}}));
-
-    if (editingIssueId) setIssues(prev => prev.map(i => i.id === item.id ? item : i));
-
-    else setIssues(prev => [item,...prev]);
-
-    // Os links temporários passam a pertencer ao registro e não são revogados aqui.
-
-    photoUrlsRef.current=[];
-
-    audioUrlRef.current="";
-
-    clearPhotos(); clearAudio(); setEditingIssueId(null);
-
-    setSelectedIssue(item); setStage("success"); setPage("success");
+  async function addIssue(){
+    if(!selectedWork){alert("Selecione uma obra.");return;}
+    if(editingIssueId){alert("A API ainda não oferece edição da descrição de ocorrências.");return;}
+    try {
+      const created=await api("/ocorrencias/",{method:"POST",body:JSON.stringify({obra_id:selectedWork.id,descricao:`${form.title.trim()} — ${form.place.trim()} — ${form.description.trim()}`})});
+      const item=mapIssue(created,works);setIssues(prev=>[item,...prev]);setSelectedIssue(item);setStage("success");setPage("success");clearPhotos();clearAudio();return;
+    }catch(err){alert("Não foi possível salvar no banco: "+err.message);return;}
 
   }
 
@@ -435,9 +444,22 @@ function App(){
 
   }
 
-  function saveUser(e){e.preventDefault();const clean=userForm.cpf.replace(/\D/g,"");if(clean.length!==11){alert("Informe um CPF com 11 dígitos.");return;}if(users.some(u=>u.cpf===clean && u.id!==editing)){alert("Este CPF já está cadastrado.");return;}if(editing){setUsers(users.map(u=>u.id===editing?{...u,...userForm,cpf:clean}:u));}else{setUsers([...users,{...userForm,id:Date.now(),cpf:clean,active:true}]);}setEditing(null);setUserForm({name:"",cpf:"",password:"",role:"inspector"});}
-
-  function startEdit(u){setEditing(u.id);setUserForm({name:u.name,cpf:fmtCpf(u.cpf),password:u.password,role:u.role});window.scrollTo({top:0,behavior:"smooth"});}
+  async function saveUser(e){
+    e.preventDefault();
+    const clean=userForm.cpf.replace(/\D/g,"");
+    if(clean.length!==11){alert("Informe CPF com 11 dígitos.");return;}
+    const perfilId=profileIds[userForm.role==="manager"?"gestor":"vistoriador"];
+    if(!perfilId){alert("Não foi possível carregar os perfis do banco.");return;}
+    try{
+      const result=await api(editing?`/usuarios/${editing}`:"/usuarios/",{method:editing?"PUT":"POST",body:JSON.stringify({nome:userForm.name,cpf:clean,perfil_id:perfilId})});
+      const saved=result.usuario||result;
+      setUsers(prev=>[...prev.filter(u=>u.id!==saved.id),{id:saved.id,name:saved.nome,cpf:saved.cpf,role:userForm.role,perfilId:saved.perfil_id,active:saved.ativo}]);
+      if(result.senha_inicial)alert("Usuário criado. Senha inicial: "+result.senha_inicial+". Guarde e compartilhe com segurança.");
+      setEditing(null);setUserForm({name:"",cpf:"",password:"",role:"inspector"});
+    }catch(err){alert("Erro ao salvar usuário: "+err.message);}
+  }
+  function startEdit(u){setEditing(u.id);setUserForm({name:u.name,cpf:fmtCpf(u.cpf),password:"",role:u.role});window.scrollTo({top:0,behavior:"smooth"});}
+  async function toggleUser(u){try{const saved=await api(`/usuarios/${u.id}/ativo`,{method:"PATCH",body:JSON.stringify({ativo:!u.active})});setUsers(prev=>prev.map(x=>x.id===u.id?{...x,active:saved.ativo}:x));}catch(err){alert(err.message);}}
 
   const Header=({title,sub})=><header className="topbar"><div className="brand-mini"><span className="brand-mark">OC</span><b>Obra<span>Check</span></b></div><div className="top-title"><b>{title}</b><small>{sub}</small></div><div className="profile-wrap"><button className="profile-btn" onClick={()=>setMenu(!menu)}><span className="avatar">{(current?.name||"U").split(" ").map(x=>x[0]).slice(0,2).join("")}</span><span className="profile-name">{current?.name}<small>{roleName(session?.role)}</small></span><span>⌄</span></button>{menu&&<div className="dropdown logout-dropdown"><button type="button" className="logout-option" onClick={()=>{setMenu(false);setLogoutOpen(true)}}>Sair da conta</button></div>}</div></header>;
 
@@ -1024,7 +1046,7 @@ function App(){
             <div className="adm-fields">
               <div><label htmlFor="adm-name">Nome completo</label><input id="adm-name" value={userForm.name} onChange={e=>setUserForm({...userForm,name:e.target.value})} required placeholder="Digite o nome completo"/></div>
               <div><label htmlFor="adm-cpf">CPF</label><input id="adm-cpf" value={userForm.cpf} onChange={e=>setUserForm({...userForm,cpf:fmtCpf(e.target.value)})} required placeholder="000.000.000-00" inputMode="numeric"/></div>
-              <div><label htmlFor="adm-password">Senha</label><input id="adm-password" type="password" value={userForm.password} onChange={e=>setUserForm({...userForm,password:e.target.value})} required placeholder="Defina uma senha"/></div>
+              <div><label htmlFor="adm-password">Senha</label><input id="adm-password" type="password" value={userForm.password} onChange={e=>setUserForm({...userForm,password:e.target.value})} placeholder="Senha inicial gerada pelo sistema" disabled/></div>
               <div><label htmlFor="adm-role">Perfil</label><select id="adm-role" value={userForm.role} onChange={e=>setUserForm({...userForm,role:e.target.value})}><option value="inspector">Vistoriador</option><option value="manager">Gestor</option></select></div>
             </div>
             <div className="adm-form-actions">{editing&&<button type="button" className="adm-cancel" onClick={()=>{setEditing(null);setUserForm({name:"",cpf:"",password:"",role:"inspector"})}}>Cancelar</button>}<button type="submit" className="adm-submit">{editing?"Salvar alterações":"Cadastrar usuário"}</button></div>
@@ -1035,7 +1057,7 @@ function App(){
           {users.map(u=><article className="adm-user-card" key={u.id}>
             <div className="adm-user-top"><span className="adm-avatar">{u.name.charAt(0).toUpperCase()}</span><div className="adm-user-identity"><strong>{u.name}</strong><small>{fmtCpf(u.cpf)}</small></div><span className={`adm-active ${u.active?"":"inactive"}`}>{u.active?"Ativo":"Inativo"}</span></div>
             <span className="adm-role">{roleName(u.role)}</span>
-            {u.role==="admin"?<p className="adm-protected">Conta atual — perfil protegido</p>:<div className="adm-user-actions"><button type="button" onClick={()=>startEdit(u)}>Editar</button><button type="button" className="adm-toggle" onClick={()=>setUsers(prev=>prev.map(x=>x.id===u.id?{...x,active:!x.active}:x))}>{u.active?"Desativar":"Ativar"}</button></div>}
+            {u.role==="admin"?<p className="adm-protected">Conta atual — perfil protegido</p>:<div className="adm-user-actions"><button type="button" onClick={()=>startEdit(u)}>Editar</button><button type="button" className="adm-toggle" onClick={()=>toggleUser(u)}>{u.active?"Desativar":"Ativar"}</button></div>}
           </article>)}
         </section>
       </main>

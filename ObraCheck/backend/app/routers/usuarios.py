@@ -68,3 +68,57 @@ def criar_usuario(
             detail="Erro ao cadastrar usuário."
         )
 
+
+
+from pydantic import BaseModel, Field
+from app.models.usuario import Usuario
+from app.models.perfil import Perfil
+
+class UsuarioEditar(BaseModel):
+    nome: str = Field(min_length=3, max_length=150)
+    cpf: str = Field(min_length=11, max_length=11)
+    perfil_id: int
+
+class UsuarioAtivar(BaseModel):
+    ativo: bool
+
+@router.get("/", response_model=list[UsuarioResposta])
+def listar_usuarios(db: Session = Depends(get_db), admin=Depends(exigir_perfil("administrador"))):
+    return db.query(Usuario).order_by(Usuario.id).all()
+
+@router.put("/{usuario_id}", response_model=UsuarioResposta)
+def editar_usuario(usuario_id: int, dados: UsuarioEditar, db: Session = Depends(get_db), admin=Depends(exigir_perfil("administrador"))):
+    usuario = db.get(Usuario, usuario_id)
+    if not usuario:
+        raise HTTPException(404, "Usuário não encontrado.")
+    perfil = db.get(Perfil, dados.perfil_id)
+    if not perfil or perfil.nome not in ("gestor", "vistoriador"):
+        raise HTTPException(400, "Perfil inválido.")
+    if usuario.id == admin.id:
+        raise HTTPException(403, "Não é permitido alterar a própria conta administrativa.")
+    cpf = ''.join(c for c in dados.cpf if c.isdigit())
+    if len(cpf) != 11:
+        raise HTTPException(400, "CPF inválido.")
+    duplicado = db.query(Usuario).filter(Usuario.cpf == cpf, Usuario.id != usuario_id).first()
+    if duplicado:
+        raise HTTPException(409, "CPF já cadastrado.")
+    usuario.nome, usuario.cpf, usuario.perfil_id = dados.nome, cpf, dados.perfil_id
+    db.commit()
+    db.refresh(usuario)
+    return usuario
+
+@router.patch("/{usuario_id}/ativo", response_model=UsuarioResposta)
+def alterar_ativo(usuario_id: int, dados: UsuarioAtivar, db: Session = Depends(get_db), admin=Depends(exigir_perfil("administrador"))):
+    usuario = db.get(Usuario, usuario_id)
+    if not usuario:
+        raise HTTPException(404, "Usuário não encontrado.")
+    if usuario.id == admin.id:
+        raise HTTPException(403, "Não é permitido desativar a própria conta.")
+    usuario.ativo = dados.ativo
+    db.commit()
+    db.refresh(usuario)
+    return usuario
+
+@router.get('/perfis/disponiveis')
+def perfis_disponiveis(db: Session = Depends(get_db), admin=Depends(exigir_perfil('administrador'))):
+    return [{'id': p.id, 'nome': p.nome} for p in db.query(Perfil).all()]

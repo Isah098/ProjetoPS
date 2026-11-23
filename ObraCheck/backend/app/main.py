@@ -7,6 +7,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.routers import autenticacao, usuarios, obras, usuario_obras, ocorrencias, evidencias, historico
 
@@ -15,6 +16,8 @@ app = FastAPI(
     description="API para gerenciamento de vistorias e não-conformidades em obras",
     version="1.0.0"
 )
+
+app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 # Registrar rotas
 app.include_router(autenticacao.router)
