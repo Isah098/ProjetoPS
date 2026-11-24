@@ -100,12 +100,13 @@ Para facilitar a execução do sistema, foi desenvolvido o arquivo `iniciar.bat`
 1. Baixe ou clone o repositório do projeto.
 2. Configure o ambiente e o banco de dados.
 3. Abra a pasta principal do ObraCheck.
-4. Execute o arquivo `iniciar.bat` com um duplo clique.
-5. Aguarde a inicialização dos serviços.
-6. Acesse a aplicação pelo navegador.
+4. Clique com o botão direito do mouse na pasta do projeto.
+5. Selecione a opção **"Revelar no Explorador de Arquivos"** para abrir a pasta no Windows.
+6. Localize o arquivo `iniciar.bat` e dê um duplo clique para executá-lo.
+7. Aguarde a inicialização dos serviços.
+8. Acesse a aplicação pelo navegador.
 
-Não é necessário iniciar manualmente o frontend e o backend em terminais separados.
-
+**Observação:** Não é necessário iniciar manualmente o frontend e o backend em terminais separados, pois o arquivo `iniciar.bat` realiza esse processo automaticamente.
 ### Endereços de acesso
 
 - **Aplicação web:** http://localhost:5173
